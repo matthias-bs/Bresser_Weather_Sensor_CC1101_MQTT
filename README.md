@@ -1,6 +1,20 @@
 # Bresser_Weather_Sensor_CC1101_MQTT
 
-## Bresser 5-in-1/6-in-1 868 MHz Weather Sensor Receiver based on CC1101 providing data via secure MQTT for ESP32/ESP8266.
+**Bresser 5-in-1/6-in-1 868 MHz Weather Sensor Receiver based on CC1101 providing data via secure MQTT for ESP32/ESP8266**
+
+## MQTT Topics
+
+MQTT publications:
+
+`<base_topic>/data`    sensor data as JSON string - see `publishWeatherdata()`
+     
+`<base_topic>/radio`   CC1101 radion transceiver info as JSON string - see `publishRadio()`
+     
+`<base_topic>/status`  "online"|"dead"$
+
+$ via LWT
+
+`<base_topic>` is set by `#define HOSTNAME ...`
 
 ## Hardware (ESP8266 D1-Mini)
 ![Bresser5in1_CC1101_D1-Mini](https://user-images.githubusercontent.com/83612361/158458191-b5cabad3-3515-45d0-98e3-94b0fa13b8ef.jpg)
