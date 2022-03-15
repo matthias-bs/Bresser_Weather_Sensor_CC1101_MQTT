@@ -3,7 +3,7 @@
 **Bresser 5-in-1/6-in-1 868 MHz Weather Sensor Receiver based on CC1101 providing data via secure MQTT for ESP32/ESP8266**
 
 Based on:
-- [Bresser5in1-CC1101](https://github.com/seaniefs/Bresser5in1-CC1101) by Sean Siford
+- [Bresser5in1-CC1101](https://github.com/seaniefs/Bresser5in1-CC1101) by [Sean Siford](https://github.com/seaniefs)
 - [RadioLib](https://github.com/jgromes/RadioLib) by Jan Gromeš
 - [arduino-mqtt](https://github.com/256dpi/arduino-mqtt) Joël Gähwiler (256dpi)
 - [ArduinoJson](https://arduinojson.org) by Benoit Blanchon 
