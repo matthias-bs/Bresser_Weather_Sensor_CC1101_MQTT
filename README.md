@@ -4,7 +4,7 @@
 
 Based on:
 - [Bresser5in1-CC1101](https://github.com/seaniefs/Bresser5in1-CC1101) by [Sean Siford](https://github.com/seaniefs)
-- [RadioLib](https://github.com/jgromes/RadioLib) by Jan Gromeš
+- [RadioLib](https://github.com/jgromes/RadioLib) by [Jan Gromeš](https://github.com/jgromes)
 - [arduino-mqtt](https://github.com/256dpi/arduino-mqtt) Joël Gähwiler (256dpi)
 - [ArduinoJson](https://arduinojson.org) by Benoit Blanchon 
 
