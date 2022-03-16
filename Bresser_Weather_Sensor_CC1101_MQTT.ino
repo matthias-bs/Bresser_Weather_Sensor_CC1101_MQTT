@@ -5,6 +5,8 @@
 // providing data via secure MQTT
 // for ESP32/ESP8266
 //
+// https://github.com/matthias-bs/Bresser_Weather_Sensor_CC1101_MQTT
+//
 // Based on:
 // Bresser5in1-CC1101 by Sean Siford (https://github.com/seaniefs/Bresser5in1-CC1101)
 // RadioLib by Jan Gromeš (https://github.com/jgromes/RadioLib)
