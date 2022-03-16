@@ -1,6 +1,6 @@
 # Bresser_Weather_Sensor_CC1101_MQTT
 
-**Bresser 5-in-1/6-in-1 868 MHz Weather Sensor Receiver based on CC1101 providing data via secure MQTT for ESP32/ESP8266**
+**Bresser 5-in-1/6-in-1 868 MHz Weather Sensor Radio Receiver based on CC1101 and ESP32/ESP8266 - provides data via secure MQTT**
 
 Based on:
 - [Bresser5in1-CC1101](https://github.com/seaniefs/Bresser5in1-CC1101) by [Sean Siford](https://github.com/seaniefs)
@@ -15,7 +15,7 @@ MQTT publications:
 
 `<base_topic>/data`    sensor data as JSON string - see `publishWeatherdata()`
      
-`<base_topic>/radio`   CC1101 radion transceiver info as JSON string - see `publishRadio()`
+`<base_topic>/radio`   CC1101 radio transceiver info as JSON string - see `publishRadio()`
      
 `<base_topic>/status`  "online"|"dead"$
 
@@ -32,13 +32,13 @@ $ via LWT
 
 [Texas Instruments CC1101 Product Page](https://www.ti.com/product/CC1101)
 
-**Note: CC1101 Connector Pitch is 2.0mm!!!**
+**Note: CC1101 Module Connector Pitch is 2.0mm!!!**
 
 Unlike most modules/breakout boards, most (if not all) CC1101 modules sold on common e-commerce platforms have a pitch (distance between pins) of 2.0mm. To connect it to breadboards or jumper wires with 2.54mm/100mil pitch (standard), the following options exist:
 
 * solder wires directly to the module
-* use a 2.0mm pin header and make/buy jumper wires with 2.54mm at one end and 2.0mm at the other (e.g. [Adafruit Female-Female 2.54 to 2.0mm Jumper Wires](https://www.adafruit.com/product/1919)
-* use a 2.0mm to 2.54 adapter PCB
+* use a 2.0mm pin header and make/buy jumper wires with 2.54mm at one end and 2.0mm at the other (e.g. [Adafruit Female-Female 2.54 to 2.0mm Jumper Wires](https://www.adafruit.com/product/1919))
+* use a [2.0mm to 2.54 adapter PCB](https://www.amazon.de/Lazmin-1-27MM-2-54MM-Adapter-Platten-Brett-drahtlose-default/dp/B07V873N52)
 
 ## Dashboard with [IoT MQTT Panel](https://snrlab.in/iot/iot-mqtt-panel-user-guide) (Example)
 ![IoTMQTTPanel_Bresser_5-in-1](https://user-images.githubusercontent.com/83612361/158457786-516467f9-2eec-4726-a9bd-36e9dc9eec5c.png)
