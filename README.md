@@ -13,6 +13,13 @@ Based on:
 * [BRESSER Weather Center 5-in-1](https://www.bresser.de/en/Weather-Time/Weather-Center/BRESSER-Weather-Center-5-in-1-black.html)
 * [BRESSER Professional WIFI colour Weather Center 5-in-1 V](https://www.bresser.de/en/Weather-Time/WLAN-Weather-Stations-Centers/BRESSER-Professional-WIFI-colour-Weather-Center-5-in-1-V.html)
 
+The Bresser 5-in-1 Weather Stations seem to use two different protocols. Select the appropriate decoder by (un-)commenting `#define BRESSER_6_IN_1` in the source code.
+
+| Model         | Decoder Function                |
+| ------------- | ------------------------------- |
+| 7002510..12   | decodeBresser**5In1**Payload()  |
+| 7002585       | decodeBresser**6In1**Payload()  |
+
 ## MQTT Topics
 
 MQTT publications:
