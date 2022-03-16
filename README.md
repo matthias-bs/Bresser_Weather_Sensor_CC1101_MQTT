@@ -8,6 +8,10 @@ Based on:
 - [arduino-mqtt](https://github.com/256dpi/arduino-mqtt) by [Joël Gähwiler (256dpi)](https://github.com/256dpi)
 - [ArduinoJson](https://arduinojson.org) by [Benoit Blanchon](https://github.com/bblanchon) 
 
+## Weather Stations
+
+* [BRESSER Weather Center 5-in-1](https://www.bresser.de/en/Weather-Time/Weather-Center/BRESSER-Weather-Center-5-in-1-black.html)
+* [BRESSER Professional WIFI colour Weather Center 5-in-1 V](https://www.bresser.de/en/Weather-Time/WLAN-Weather-Stations-Centers/BRESSER-Professional-WIFI-colour-Weather-Center-5-in-1-V.html)
 
 ## MQTT Topics
 
