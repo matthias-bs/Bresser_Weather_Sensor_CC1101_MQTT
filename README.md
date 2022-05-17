@@ -28,7 +28,7 @@ MQTT publications:
      
 `<base_topic>/radio`   CC1101 radio transceiver info as JSON string - see `publishRadio()`
      
-`<base_topic>/status`  "online"|"dead"$
+`<base_topic>/status`  "online"|"offline"|"dead"$
 
 $ via LWT
 
