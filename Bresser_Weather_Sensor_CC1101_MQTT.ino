@@ -1,9 +1,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-// Bresser_WeatherStation_CC1101_MQTT.ino
+// Bresser_Weather_Sensor_CC1101_MQTT.ino
 //
-// Bresser 5-in-1/6-in-1 868 MHz Weather Sensor Receiver based on CC1101
-// providing data via secure MQTT
-// for ESP32/ESP8266
+// Bresser 5-in-1 868 MHz Weather Sensor Radio Receiver based on CC1101 and ESP32/ESP8266 -
+// provides data via secure MQTT
 //
 // https://github.com/matthias-bs/Bresser_Weather_Sensor_CC1101_MQTT
 //
@@ -19,7 +18,7 @@
 // MQTT publications:               
 //     <base_topic>/data    sensor data as JSON string - see publishWeatherdata()
 //     <base_topic>/radio   CC1101 radion transceiver info as JSON string - see publishRadio()
-//     <base_topic>/status  "online"|"dead"$
+//     <base_topic>/status  "online"|"offline"|"dead"$
 //
 // $ via LWT
 //
@@ -52,6 +51,11 @@
 // History:
 //
 // 20220227 Created
+// 20220424 Added deep sleep mode
+// 20220425 Added conversion of wind speed from m/s to bft
+//          Cleaned up code
+// 20220517 Improved sleep mode
+//          Added status LED option
 //
 // ToDo:
 // 
@@ -59,7 +63,8 @@
 //
 // Notes:
 //
-// -
+// - To enable wakeup from deep sleep on ESP8266, GPIO16 (D0) must be connected to RST!
+//   Add a jumper to remove this connection for programming!
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -67,9 +72,36 @@
 // Comment out BRESSER_6_IN_1 to use decodeBresser5In1Payload()
 // Uncomment   BRESSER_6_IN_1 to use decodeBresser6In1Payload()
 #define BRESSER_6_IN_1
+
+// Number of weather sensor reception and decoding retries
+#define RX_RETRIES 100
+
+// Enable LED indicating successful data reception
+#define LED_EN
+
+// LED pin
+#define LED_GPIO 2
+
+// User specific options
+#define BFT_EN                  // enable transmission of wind speed in Beaufort (in addition to m/s)
+#define PAYLOAD_SIZE    200     // maximum MQTT message size
+#define STATUS_INTERVAL 30000   // MQTT status message interval [ms]
+#define DATA_INTERVAL   15000   // MQTT data message interval [ms]
+#define AWAKE_TIMEOUT   300000  // maximum time until sketch is forced to sleep [ms]
+#define SLEEP_INTERVAL  10000   // sleep interval [ms]
+#define SLEEP_EN        false   // enable sleep mode (see notes above!)
+
+
+// Enable to debug MQTT connection; will generate synthetic sensor data.
 //#define _DEBUG_MQTT_
-//#define _DEBUG_MODE_
-#define RADIOLIB_DEBUG
+
+// Print misc debug output
+#define _DEBUG_MODE_
+
+// Enable RadioLib internal debug messages
+//#define RADIOLIB_DEBUG
+
+
 #include <Arduino.h>
 #include <RadioLib.h>
 
@@ -87,14 +119,14 @@
 #define RADIOLIB_BUILD_ARDUINO
 #define xstr(s) str(s)
 #define str(s) #s
-#define PAYLOAD_SIZE    200
-#define STATUS_INTERVAL 30000
-#define DATA_INTERVAL   15000
+
 
 // https://docs.openmqttgateway.com/setitup/rf.html#pinout
 // Board   Receiver Pin(GDO2)  Emitter Pin(GDO0)   SCK   VCC   MOSI  MISO  CSN   GND
 // ESP8266   D2/D3/D1/D8            RX/D2          D5    3V3   D7    D6    D8    GND
 // ESP32         D27                 D12           D18   3V3   D23   D19   D5    GND
+
+// Note: GDO2 does not seem to be used.
 
 #if defined(ESP32)
     #define PIN_CC1101_CS   5
@@ -106,7 +138,7 @@
     #define PIN_CC1101_GDO2 5
 #endif
 
-const char sketch_id[] = "Bresser5in1 20220308";
+const char sketch_id[] = "Bresser_Weather_Sensor_CC1101_MQTT 20220517";
 
 //enable only one of these below, disabling both is fine too.
 // #define CHECK_CA_ROOT
@@ -213,7 +245,10 @@ struct WeatherData_S {
     int      moisture;             // only 6-in-1
 };
 
-typedef struct WeatherData_S WeatherData;
+typedef struct WeatherData_S WeatherData_t;
+
+// Weather data object
+WeatherData_t weatherData;
 
 
 // MQTT topics
@@ -252,7 +287,7 @@ void mqtt_connect();
 //
 void mqtt_setup()
 {
-    Serial.print("Attempting to connect to SSID: ");
+    Serial.print(F("Attempting to connect to SSID: "));
     Serial.print(ssid);
     WiFi.hostname(HOSTNAME);
     WiFi.mode(WIFI_STA);
@@ -262,7 +297,8 @@ void mqtt_setup()
         Serial.print(".");
         delay(1000);
     }
-    Serial.println("connected!");
+    Serial.println(F("connected!"));
+    
     /*
     Serial.print("Setting time using SNTP ");
     configTime(-5 * 3600, 0, "pool.ntp.org", "time.nist.gov");
@@ -299,7 +335,7 @@ void mqtt_setup()
     
     // set up MQTT receive callback (if required)
     //client.onMessage(messageReceived);
-    client.setWill(MQTT_PUB_STATUS, "dead", true /* retained*/, true /* qos */);
+    client.setWill(MQTT_PUB_STATUS, "dead", true /* retained*/, 1 /* qos */);
     mqtt_connect();
 }
 
@@ -309,22 +345,23 @@ void mqtt_setup()
 //
 void mqtt_connect()
 {
-    Serial.print("Checking wifi...");
+    Serial.print(F("Checking wifi..."));
     while (WiFi.status() != WL_CONNECTED)
     {
         Serial.print(".");
         delay(1000);
     }
 
-    Serial.print("\nMQTT connecting ");
+    Serial.print(F("\nMQTT connecting... "));
     while (!client.connect(HOSTNAME, MQTT_USER, MQTT_PASS))
     {
         Serial.print(".");
         delay(1000);
     }
 
-    Serial.println("connected!");
+    Serial.println(F("connected!"));
     //client.subscribe(MQTT_SUB_IN);
+    client.publish(MQTT_PUB_STATUS, "online");
 }
 
 
@@ -341,7 +378,7 @@ void messageReceived(String &topic, String &payload)
 // Generate sample data for testing MQTT publishing -
 // use with #define _DEBUG_MQTT_
 //
-void genData(WeatherData *pOut)
+void genData(WeatherData_t *pOut)
 {
     pOut->sensor_id = 0xff;
     pOut->temp_c = 22.2f;
@@ -423,7 +460,7 @@ int add_bytes(uint8_t const message[], unsigned num_bytes)
 // DECODE_PAR_ERR - Parity Error
 // DECODE_CHK_ERR - Checksum Error
 //
-DecodeStatus decodeBresser5In1Payload(uint8_t *msg, uint8_t msgSize, WeatherData *pOut) { 
+DecodeStatus decodeBresser5In1Payload(uint8_t *msg, uint8_t msgSize, WeatherData_t *pOut) { 
     // First 13 bytes need to match inverse of last 13 bytes
     for (unsigned col = 0; col < msgSize / 2; ++col) {
         if ((msg[col] ^ msg[col + 13]) != 0xff) {
@@ -548,7 +585,7 @@ Parameters:
  DECODE_CHK_ERR - Checksum Error
 
 */
-DecodeStatus decodeBresser6In1Payload(uint8_t *msg, uint8_t msgSize, WeatherData *pOut) {
+DecodeStatus decodeBresser6In1Payload(uint8_t *msg, uint8_t msgSize, WeatherData_t *pOut) {
     int const moisture_map[] = {0, 7, 13, 20, 27, 33, 40, 47, 53, 60, 67, 73, 80, 87, 93, 99}; // scale is 20/3
     
     // LFSR-16 digest, generator 0x8810 init 0x5412
@@ -556,9 +593,9 @@ DecodeStatus decodeBresser6In1Payload(uint8_t *msg, uint8_t msgSize, WeatherData
     int digest  = lfsr_digest16(&msg[2], 15, 0x8810, 0x5412);
     if (chkdgst != digest) {
         //decoder_logf(decoder, 2, __func__, "Digest check failed %04x vs %04x", chkdgst, digest);
-        Serial.print("Digest check failed - ");
+        Serial.print(F("Digest check failed - "));
         Serial.print(chkdgst, HEX);
-        Serial.print(" vs ");
+        Serial.print(F(" vs "));
         Serial.println(digest, HEX);
         return DECODE_DIG_ERR;
     }
@@ -567,9 +604,9 @@ DecodeStatus decodeBresser6In1Payload(uint8_t *msg, uint8_t msgSize, WeatherData
     int sum    = add_bytes(&msg[2], 16); // msg[2] to msg[17]
     if ((sum & 0xff) != 0xff) {
         //decoder_logf(decoder, 2, __func__, "Checksum failed %04x vs %04x", chksum, sum);
-        Serial.print("Checksum failed - ");
+        Serial.print(F("Checksum failed - "));
         Serial.print(chksum, HEX);
-        Serial.print(" vs ");
+        Serial.print(F(" vs "));
         Serial.println(sum, HEX);
         return DECODE_CHK_ERR;
     }
@@ -627,66 +664,167 @@ DecodeStatus decodeBresser6In1Payload(uint8_t *msg, uint8_t msgSize, WeatherData
     return DECODE_OK;
 }
 
-
+#ifdef BFT_EN
 //
-// Setup
+// Convert wind speed from meters per second to Beaufort
+// [https://en.wikipedia.org/wiki/Beaufort_scale]
 //
-void setup() {
-    Serial.begin(115200);
-    Serial.println();
-    Serial.println();
-    Serial.println(sketch_id);
-    Serial.println();
-
-    Serial.printf("Platform: %s\n", xstr(RADIOLIB_PLATFORM));
-    Serial.printf("SPI:      %s\n", xstr(RADIOLIB_DEFAULT_SPI));
-    Serial.printf("SPI Set.: %s\n", xstr(RADIOLIB_DEFAULT_SPI_SETTINGS));
-
-    mqtt_setup();
-
-    #ifndef _DEBUG_MQTT_
-    Serial.println("[CC1101] Initializing ... ");
-    int state = radio.begin(868.35, 8.22, 57.136417, 270.0, 10, 32);
-    if (state == RADIOLIB_ERR_NONE) {
-        Serial.println("success!");
-        state = radio.setCrcFiltering(false);
-        if (state != RADIOLIB_ERR_NONE) {
-            Serial.printf("[CC1101] Error disabling crc filtering: [%d]\n", state);
-            while (true)
-                ;
-        }
-        state = radio.fixedPacketLengthMode(27);
-        if (state != RADIOLIB_ERR_NONE) {
-            Serial.printf("[CC1101] Error setting fixed packet length: [%d]\n", state);
-            while (true)
-                ;
-        }
-        // Preamble: AA AA AA AA AA
-        // Sync is: 2D D4 
-        // Preamble 40 bits but the CC1101 doesn't allow us to set that
-        // so we use a preamble of 32 bits and then use the sync as AA 2D
-        // which then uses the last byte of the preamble - we recieve the last sync byte
-        // as the 1st byte of the payload.
-        state = radio.setSyncWord(0xAA, 0x2D, 0, false);
-        if (state != RADIOLIB_ERR_NONE) {
-            Serial.printf("[CC1101] Error setting sync words: [%d]\n", state);
-            while (true)
-                ;
-        }
+uint8_t windspeed_ms_to_bft(float ms)
+{
+  if (ms < 5.5) {
+    // 0..3 Bft
+    if (ms < 0.9) {
+      return 0;
+    } else if (ms < 1.6) {
+      return 1;
+    } else if (ms < 3.4) {
+      return 2;
     } else {
-        Serial.printf("[CC1101] Error initialising: [%d]\n", state);
-        while (true)
-            ;
+      return 3;
     }
-    Serial.println("[CC1101] Setup complete - awaiting incoming messages...");
-    #endif
+  } else if (ms < 17.2) { 
+    // 4..7 Bft
+    if (ms < 8) {
+      return 4;
+    } else if (ms < 10.8) {
+      return 5;
+    } else if (ms < 13.9) {
+      return 6;
+    } else {
+      return 7;
+    }
+  } else {
+    // 8..12 Bft
+    if (ms < 20.8) {
+      return 8;
+    } else if (ms < 24.5) {
+      return 9;
+    } else if (ms < 28.5) {
+      return 10;
+    } else if (ms < 32.7) {
+      return 11;
+    } else {
+      return 12;
+    }
+  }
+}
+#endif
+
+
+//
+// Get weather data from CC1101 receiver and decode it
+//
+bool getWeatherdata(void)
+{
+    uint8_t recvData[27];
+    bool decode_ok = false;
+
+    // Receive data
+    // 1. flush RX buffer
+    // 2. switch to RX mode
+    // 3. wait for expected RX packet or timeout [~500us in this configuration]
+    // 4. flush RX buffer
+    // 5. switch to standby 
+    int state = radio.receive(recvData, 27);
+    
+
+    if (state == RADIOLIB_ERR_NONE) {
+        // Verify last syncword is 1st byte of payload (see above)
+        if (recvData[0] == 0xD4) {
+            #ifdef _DEBUG_MODE_
+                // print the data of the packet
+                Serial.print(F("[CC1101] Data:\t\t"));
+                for(int i = 0 ; i < sizeof(recvData) ; i++) {
+                    Serial.printf(" %02X", recvData[i]);
+                }
+                Serial.println();
+
+                Serial.printf("[CC1101] R [0x%02X] RSSI: %f LQI: %d\n", recvData[0], radio.getRSSI(), radio.getLQI());
+            #endif
+
+            #ifdef _DEBUG_MODE_
+                //printRawdata(&recvData[1], sizeof(recvData));
+            #endif
+            
+            // Decode the information - skip the last sync byte we used to check the data is OK
+            #ifdef BRESSER_6_IN_1
+                decode_ok = (decodeBresser6In1Payload(&recvData[1], sizeof(recvData) - 1, &weatherData) == DECODE_OK);
+                Serial.printf("decode_ok: %d, temp_ok: %d, wind_ok: %d, rain_ok: %d\n",
+                     decode_ok, weatherData.temp_ok, weatherData.wind_ok, weatherData.rain_ok);
+            #else
+                decode_ok = (decodeBresser5In1Payload(&recvData[1], sizeof(recvData) - 1, &weatherData) == DECODE_OK);
+          
+                // Fixed set of data for 5-in-1 sensor
+                weatherData.temp_ok     = true;
+                weatherData.uv_ok       = false;
+                weatherData.wind_ok     = true;
+                weatherData.rain_ok     = true;
+                weatherData.moisture_ok = false;
+            #endif
+            
+            if (decode_ok) {
+                const float METERS_SEC_TO_MPH = 2.237;
+                Serial.printf("Id: [%8X] Battery: [%s] ",
+                    weatherData.sensor_id,
+                    weatherData.battery_ok ? "OK " : "Low");
+                #ifdef BRESSER_6_IN_1
+                    Serial.printf("Ch: [%d] ", weatherData.chan);
+                #endif
+                if (weatherData.temp_ok) {
+                    Serial.printf("Temp: [%3.1fC] Hum: [%3d%%] ",
+                        weatherData.temp_c,
+                        weatherData.humidity);
+                } else {
+                    Serial.printf("Temp: [---.-C] Hum: [---%] ");
+                }
+                if (weatherData.wind_ok) {
+                    Serial.printf("Wind max: [%3.1fm/s] Wind avg: [%3.1fm/s] Wind dir: [%4.1fdeg] ",
+                         weatherData.wind_gust_meter_sec,
+                         weatherData.wind_avg_meter_sec,
+                         weatherData.wind_direction_deg);
+                } else {
+                    Serial.printf("Wind max: [--.-m/s] Wind avg: [--.-m/s] ");
+                }
+                if (weatherData.rain_ok) {
+                    Serial.printf("Rain: [%6.1fmm] ",  
+                        weatherData.rain_mm);
+                } else {
+                    Serial.printf("Rain: [-----.-mm] "); 
+                }
+                if (weatherData.moisture_ok) {
+                    Serial.printf("Moisture: [%2d%%]",
+                        weatherData.moisture);
+                }
+                Serial.printf("\n");
+                //printf("{\"sensor_type\": \"bresser-5-in-1\", \"sensor_id\": %d, \"battery\": \"%s\", \"temp_c\": %.1f, \"hum_pc\": %d, \"wind_gust_ms\": %.1f, \"wind_speed_ms\": %.1f, \"wind_dir\": %.1f, \"rain_mm\": %.1f}\n",
+                //       sensor_id, !battery_low ? "OK" : "Low",
+                //       temperature, humidity, wind_gust, wind_avg, wind_direction_deg, rain);
+            } // if (decode_ok)
+            else {
+                #ifdef _DEBUG_MODE_
+                    Serial.printf("[CC1101] R [0x%02X] RSSI: %f LQI: %d\n", recvData[0], radio.getRSSI(), radio.getLQI());
+                #endif
+            }
+        } // if (recvData[0] == 0xD4)
+        else if (state == RADIOLIB_ERR_RX_TIMEOUT) {
+            #ifdef _DEBUG_MODE_
+                Serial.print("T");
+            #endif
+        } // if (state == RADIOLIB_ERR_RX_TIMEOUT)
+        else {
+            // some other error occurred
+            Serial.printf("[CC1101] Receive failed - failed, code %d\n", state);
+        }
+    } // if (state == RADIOLIB_ERR_NONE)
+
+    return decode_ok;
 }
 
 
 //
 // Publish weather sensor data as JSON string via MQTT
 //
-void publishWeatherdata(WeatherData *weatherData)
+void publishWeatherdata(WeatherData_t *weatherData)
 {
     DynamicJsonDocument payload(PAYLOAD_SIZE);
     char mqtt_payload[PAYLOAD_SIZE];
@@ -698,7 +836,7 @@ void publishWeatherdata(WeatherData *weatherData)
     
     // Example:
     // {"sensor_id":"0x12345678","ch":0,"battery_ok":true,"humidity":44,"wind_gust":1.2,"wind_avg":1.2,"wind_dir":150,"rain":146}
-    sprintf(mqtt_payload, "{\"sensor_id\": 0x%8X", weatherData->sensor_id);
+    sprintf(mqtt_payload, "{\"sensor_id\": %8X", weatherData->sensor_id);
     #ifdef BRESSER_6_IN_1
         sprintf(&mqtt_payload[strlen(mqtt_payload)], ",\"ch:\":%d", weatherData->chan);
     #endif
@@ -710,6 +848,10 @@ void publishWeatherdata(WeatherData *weatherData)
     if (weatherData->wind_ok) {
         sprintf(&mqtt_payload[strlen(mqtt_payload)], ",\"wind_gust\":%.1f", weatherData->wind_gust_meter_sec);
         sprintf(&mqtt_payload[strlen(mqtt_payload)], ",\"wind_avg\":%.1f", weatherData->wind_avg_meter_sec);
+        #ifdef BFT_EN
+            sprintf(&mqtt_payload[strlen(mqtt_payload)], ",\"wind_gust_bft\":%d", windspeed_ms_to_bft(weatherData->wind_gust_meter_sec));
+            sprintf(&mqtt_payload[strlen(mqtt_payload)], ",\"wind_avg_bft\":%d", windspeed_ms_to_bft(weatherData->wind_avg_meter_sec));        
+        #endif
         sprintf(&mqtt_payload[strlen(mqtt_payload)], ",\"wind_dir\":%.1f", weatherData->wind_direction_deg);
     }
     if (weatherData->uv_ok) {
@@ -749,7 +891,7 @@ void publishRadio()
 //
 #ifdef _DEBUG_MODE_
 void printRawdata(uint8_t *msg, uint8_t msgSize) {
-    Serial.println("Raw Data:");
+    Serial.println(F("Raw Data:"));
     for (uint8_t p = 0 ; p < msgSize ; p++) {
         Serial.printf("%02X ", msg[p]);
     }
@@ -759,20 +901,81 @@ void printRawdata(uint8_t *msg, uint8_t msgSize) {
 
 
 //
+// Setup
+//
+void setup() {
+    Serial.begin(115200);
+    Serial.println();
+    Serial.println();
+    Serial.println(sketch_id);
+    Serial.println();
+
+    mqtt_setup();
+
+    #ifndef _DEBUG_MQTT_
+    Serial.println(F("[CC1101] Initializing ... "));
+
+    // Initialization - starts with presence detection (chip version) and reset cmd
+    int state = radio.begin(868.35, 8.22, 57.136417, 270.0, 10, 32);
+    if (state == RADIOLIB_ERR_NONE) {
+        Serial.println("success!");
+        state = radio.setCrcFiltering(false);
+        if (state != RADIOLIB_ERR_NONE) {
+            Serial.printf("[CC1101] Error disabling crc filtering: [%d]\n", state);
+            while (true)
+                ;
+        }
+        state = radio.fixedPacketLengthMode(27);
+        if (state != RADIOLIB_ERR_NONE) {
+            Serial.printf("[CC1101] Error setting fixed packet length: [%d]\n", state);
+            while (true)
+                ;
+        }
+        // Preamble: AA AA AA AA AA
+        // Sync is: 2D D4 
+        // Preamble 40 bits but the CC1101 doesn't allow us to set that
+        // so we use a preamble of 32 bits and then use the sync as AA 2D
+        // which then uses the last byte of the preamble - we recieve the last sync byte
+        // as the 1st byte of the payload.
+        state = radio.setSyncWord(0xAA, 0x2D, 0, false);
+        if (state != RADIOLIB_ERR_NONE) {
+            Serial.printf("[CC1101] Error setting sync words: [%d]\n", state);
+            while (true)
+                ;
+        }
+    } else {
+        Serial.printf("[CC1101] Error initialising: [%d]\n", state);
+        while (true)
+            ;
+    }
+    Serial.println(F("[CC1101] Setup complete - awaiting incoming messages..."));
+    #endif
+
+    #ifdef LED_EN
+       // Configure LED output pins
+       pinMode(LED_GPIO, OUTPUT);
+       digitalWrite(LED_GPIO, HIGH);
+    #endif
+}
+
+
+//
 // Main execution loop
 //
 void loop() {
+    static bool temp_ok = false;
+    static bool rain_ok = false;
     
     if (WiFi.status() != WL_CONNECTED)
     {
-        Serial.print("Checking wifi" );
+        Serial.print(F("Checking wifi"));
         while (WiFi.waitForConnectResult() != WL_CONNECTED)
         {
             WiFi.begin(ssid, pass);
             Serial.print(".");
             delay(10);
         }
-        Serial.println("connected");
+        Serial.println(F("connected"));
     }
     else
     {
@@ -788,124 +991,67 @@ void loop() {
     
     const uint32_t currentMillis = millis();
     if (currentMillis - statusPublishPreviousMillis >= STATUS_INTERVAL) {
+        // publish a status message @STATUS_INTERVAL
         statusPublishPreviousMillis = currentMillis;
         client.publish(MQTT_PUB_STATUS, "online");
         publishRadio();
     }
 
-    uint8_t recvData[27];
-
+    bool decode_ok = false;
     #ifdef _DEBUG_MQTT_
-    int state = RADIOLIB_ERR_NONE;
+        decode_ok = genWeatherdata(&weatherData);
     #else
-    int state = radio.receive(recvData, 27);
-    #endif
-    if (state == RADIOLIB_ERR_NONE) {
-        // Verify last syncword is 1st byte of payload (see above)
-       #ifdef _DEBUG_MQTT_
-           if (true) {
-       #else
-           if (recvData[0] == 0xD4) {
-       #endif
-
-            #ifdef _DEBUG_MODE_
-                // print the data of the packet
-                Serial.print("[CC1101] Data:\t\t");
-                for(int i = 0 ; i < sizeof(recvData) ; i++) {
-                    Serial.printf(" %02X", recvData[i]);
-                }
-                Serial.println();
-
-                Serial.printf("[CC1101] R [0x%02X] RSSI: %f LQI: %d\n", recvData[0], radio.getRSSI(), radio.getLQI());
-            #endif
-
-            // Decode the information - skip the last sync byte we use to check the data is OK
-            WeatherData weatherData = { 0 };
-            
-            bool decode_ok = true;
-            #ifdef _DEBUG_MQTT_
-                genData(&weatherData);
-            #endif
-
-            #ifdef _DEBUG_MODE_
-                printRawdata(&recvData[1], sizeof(recvData));
-            #endif
-
-            #ifndef _DEBUG_MQTT_
-                #ifdef BRESSER_6_IN_1
-                    decode_ok = (decodeBresser6In1Payload(&recvData[1], sizeof(recvData) - 1, &weatherData) == DECODE_OK);
-                #else
-                    decode_ok = (decodeBresser5In1Payload(&recvData[1], sizeof(recvData) - 1, &weatherData) == DECODE_OK);
-          
-                    // Fixed set of data for 5-in-1 sensor
-                    weatherData.temp_ok     = true;
-                    weatherData.uv_ok       = false;
-                    weatherData.wind_ok     = true;
-                    weatherData.rain_ok     = true;
-                    weatherData.moisture_ok = false;
-                #endif
-            #endif
-            if (decode_ok) {
-                // publish a message roughly every second.
-                if (millis() - lastMillis > DATA_INTERVAL)
-                { 
-                    lastMillis = millis();
-                    publishWeatherdata(&weatherData);
-                }
-
-                #ifdef _DEBUG_MODE_
-                    const float METERS_SEC_TO_MPH = 2.237;
-                    printf("Id: [%8X] Battery: [%s] ",
-                    weatherData.sensor_id,
-                    weatherData.battery_ok ? "OK " : "Low");
-                    #ifdef BRESSER_6_IN_1
-                        printf("Ch: [%d] ", weatherData.chan);
-                    #endif
-                    if (weatherData.temp_ok) {
-                        printf("Temp: [%5.1fC] Hum: [%3d%%] ",
-                            weatherData.temp_c,
-                            weatherData.humidity);
-                    } else {
-                        printf("Temp: [---.-C] Hum: [---%%] ");
-                    }
-                    if (weatherData.wind_ok) {
-                        printf("Wind max: [%4.1fm/s] Wind avg: [%4.1fm/s] Wind dir: [%5.1fdeg] ",
-                            weatherData.wind_gust_meter_sec,
-                            weatherData.wind_avg_meter_sec,
-                            weatherData.wind_direction_deg);
-                    } else {
-                        printf("Wind max: [--.-m/s] Wind avg: [--.-m/s] ");
-                    }
-                    if (weatherData.rain_ok) {
-                        printf("Rain: [%7.1fmm] ",  
-                            weatherData.rain_mm);
-                    } else {
-                        printf("Rain: [-----.-mm] "); 
-                    }
-                    if (weatherData.moisture_ok) {
-                        printf("Moisture: [%2d%%]",
-                            weatherData.moisture);
-                    }
-                        printf("\n");
-                        //printf("{\"sensor_type\": \"bresser-5-in-1\", \"sensor_id\": %d, \"battery\": \"%s\", \"temp_c\": %.1f, \"hum_pc\": %d, \"wind_gust_ms\": %.1f, \"wind_speed_ms\": %.1f, \"wind_dir\": %.1f, \"rain_mm\": %.1f}\n",
-                        //       sensor_id, !battery_low ? "OK" : "Low",
-                        //       temperature, humidity, wind_gust, wind_avg, wind_direction_deg, rain);
-                #endif
-            } // if (decode_ok)
-            else {
-                #ifdef _DEBUG_MODE_
-                    Serial.printf("[CC1101] R [0x%02X] RSSI: %f LQI: %d\n", recvData[0], radio.getRSSI(), radio.getLQI());
-                #endif
-            }
-        } // if (recvData[0] == 0xD4)
-        else if (state == RADIOLIB_ERR_RX_TIMEOUT) {
-            #ifdef _DEBUG_MODE_
-                Serial.print("T");
-            #endif
-        } // if (state == RADIOLIB_ERR_RX_TIMEOUT)
-        else {
-            // some other error occurred
-            Serial.printf("[CC1101] Receive failed - failed, code %d\n", state);
+        for (uint8_t i=0; (i < RX_RETRIES) && !decode_ok; i++) { 
+            client.loop();
+            decode_ok = getWeatherdata();
         }
-    } // if (state == RADIOLIB_ERR_NONE)
+    #endif
+
+    // BRESSER_6_IN_1 message contains either temperature OR rain data
+    // Save what has already been sent
+    if (decode_ok) {
+        if (weatherData.temp_ok) {
+          temp_ok = true;
+        }
+        if (weatherData.rain_ok) {
+          rain_ok = true;
+        }
+    }
+
+    #ifdef LED_EN
+        if (decode_ok) {
+          digitalWrite(LED_GPIO, LOW);
+        } else {
+          digitalWrite(LED_GPIO, HIGH);
+        }
+    #endif
+    
+    // publish a data message @DATA_INTERVAL
+    if (millis() - lastMillis > DATA_INTERVAL) { 
+        lastMillis = millis();
+        publishWeatherdata(&weatherData);
+    }
+
+    bool force_sleep = millis() > AWAKE_TIMEOUT;
+
+    // Go to sleep only after complete set of data has been sent
+    if (SLEEP_EN && ((temp_ok && rain_ok) || force_sleep)) {
+        #ifdef _DEBUG_MODE_
+            if (force_sleep) {
+                Serial.println(F("Awake time-out!"));
+                Serial.printf("temp_ok: %d, rain_ok: %d\n", temp_ok, rain_ok);
+            } else {
+                Serial.println(F("Data forwarding completed.")); 
+            }
+        #endif
+        Serial.printf("Sleeping for %d ms\n", SLEEP_INTERVAL); 
+        Serial.flush();
+        client.publish(MQTT_PUB_STATUS, "offline", true /* retained */, 0 /* qos */);
+        client.disconnect();
+        client.loop();
+        #ifdef LED_EN
+            pinMode(LED_GPIO, INPUT);
+        #endif
+        ESP.deepSleep(SLEEP_INTERVAL * 1000);
+    }
 } // loop()
