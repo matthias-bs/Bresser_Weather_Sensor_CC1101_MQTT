@@ -36,7 +36,7 @@ $ via LWT
 
 `<base_topic>/data` JSON Example:
 ```
-{"sensor_id":"0x12345678","ch":0,"battery_ok":true,"humidity":44,"wind_gust":1.2,"wind_avg":1.2,"wind_dir":150,"rain":146}
+{"sensor_id":12345678,"ch":0,"battery_ok":true,"humidity":44,"wind_gust":1.2,"wind_avg":1.2,"wind_dir":150,"rain":146}
 ```
 
 ## Hardware 
