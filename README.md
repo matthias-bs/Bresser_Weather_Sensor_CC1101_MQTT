@@ -1,3 +1,8 @@
+> :warning: This repository is deprecated and no longer maintained. 
+> The recommended alternative is [BresserWeatherSensorReceiver](/matthias-bs/BresserWeatherSensorReceiver)
+> which provides a much cleaner design and allows to use an SX1276 or RFM95W radio receiver as an alternative to the CC1101.
+> Please refer to the [BresserWeatherSensorMQTT](https://github.com/matthias-bs/BresserWeatherSensorReceiver/tree/main/examples/BresserWeatherSensorMQTT) example.
+
 # Bresser_Weather_Sensor_CC1101_MQTT
 
 **Bresser 5-in-1/6-in-1 868 MHz Weather Sensor Radio Receiver based on CC1101 and ESP32/ESP8266 - provides data via secure MQTT**
